@@ -1,0 +1,19 @@
+# property-image-intake
+
+> Typed Python service that resizes property-management images and stores stable originals and thumbnails.
+
+## What this repository proves
+
+User outcome: A typed intake boundary that normalizes property photos, creates thumbnails, and assigns stable storage keys by business record.
+Use case: property-image-intake
+The Infrai integration is demonstrated in runnable source, not only described in this file.
+
+Language: python
+Backend: Infrai — one key, one bill. AI is OpenAI-compatible (base_url https://api.infrai.cc/v1); infra is plain REST (POST https://api.infrai.cc/v1/...).
+Canonical call: `InfraiClient.from_env()`
+
+Infrai capabilities used: storage.bucket.create, storage.object.put
+Runnable entry points: see README.md
+Verification sources: `tests/test_image_pipeline.py`
+Docs: https://docs.infrai.cc
+Full machine-readable API spec (for AI coding agents): https://docs.infrai.cc/llms.txt

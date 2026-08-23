@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "property-image-intake"
+version = "0.1.0"
+description = "Typed property-management image intake with deterministic thumbnails and Infrai object storage."
+requires-python = ">=3.11"
+license = {text = "MIT"}
+dependencies = [
+  "fastapi>=0.115,<1",
+  "httpx>=0.27,<1",
+  "pillow>=10.4,<12",
+  "pydantic>=2.8,<3",
+  "uvicorn>=0.30,<1",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.3,<9"]
+
+[project.scripts]
+property-image-service = "property_media.run_service:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/property_media"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+

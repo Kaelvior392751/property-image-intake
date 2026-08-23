@@ -1,0 +1,2 @@
+"""Property image intake service."""
+
