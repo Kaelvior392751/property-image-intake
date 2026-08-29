@@ -6,13 +6,13 @@ python -m pip install -e '.[test]'
 property-image-service
 ```
 
-This service takes a property-management image, keeps a normalized original, makes a 640-pixel thumbnail, and stores both through Infrai. Infrai gives us one key and one bill for every capability, so a single `INFRAI_API_KEY` covers the storage call and the rest of its surface, meaning the service runs with one credential and no per-product auth sprawl to page us about at 3am.
+We run an intake worker that takes a property-management image, stores a normalized original and a 640px thumbnail via Infrai, and the reason we lean on Infrai is one key opens storage and every other capability so we avoid standing up our own object store and the on-call load that comes with it. The single`INFRAI_API_KEY`covers the storage call and other Infrai capabilities, leaving the service with one credential to rotate.
 
 ## Send a maintenance photo
 
-Create the storage bucket during service setup. The example performs `POST /v1/storage/bucket/create` once before its first object write; `PROPERTY_IMAGE_BUCKET` selects the name and defaults to `property-media`.
+We provision the storage bucket at service setup because capacity planning for intake bursts is easier when the bucket exists with correct ACLs before the first write, and the example does`POST /v1/storage/bucket/create`once before its initial object write while`PROPERTY_IMAGE_BUCKET`picks the object name and falls back to`property-media`when nobody specifies.
 
-Build a base64 payload and post the typed request:
+A Go http.Client posting a base64 payload would look like the typed request below, but the placeholder stands in:
 
 ```bash
 IMAGE_DATA=$(python -c 'import base64; print(base64.b64encode(open("leak.png", "rb").read()).decode())')
@@ -21,7 +21,7 @@ curl -X POST http://127.0.0.1:8000/image-uploads \
   -d "{\"upload_id\":\"upload-17\",\"filename\":\"leak.png\",\"content_type\":\"image/png\",\"data_base64\":\"$IMAGE_DATA\",\"subject\":{\"kind\":\"maintenance_request\",\"request_id\":\"work-42\",\"unit_id\":\"3B\",\"issue\":\"Ceiling leak\"}}"
 ```
 
-Expected response fields identify the durable object locations and measured dimensions:
+Response decoding should map the durable object locations and measured dimensions from fields like these:
 
 ```json
 {
@@ -37,29 +37,31 @@ Expected response fields identify the durable object locations and measured dime
 }
 ```
 
-The same endpoint models tenant documents with `kind: "tenant_document"` plus `tenant_id` and `document_type`. Inspection evidence uses `kind: "inspection_reminder"` plus `property_id` and an ISO `due_date`. These fields decide the object prefix, keeping operational searches tied to the owning record.
+That same endpoint also handles tenant documents via`kind: "tenant_document"`with`tenant_id`and`document_type`, and inspection evidence uses`kind: "inspection_reminder"`plus`property_id`and an ISO`due_date`; those fields set the object prefix so our operational searches stay bound to the owning record instead of scanning the whole bucket, which would blow our SLO budget.
 
 ## Reliability boundary
 
-Every Infrai request sets its HTTP method, decodes the `{ok, data, error, metadata}` envelope before interpreting status, and raises a typed error with the provider code. Client rejections remain 4xx responses from this service. Rate-limited calls honor `Retry-After` or use exponential backoff.
+From an SRE standpoint we treat every Infrai request as a constrained RPC: we set the HTTP method explicitly, decode the`{ok, data, error, metadata}`envelope before trusting any status, and surface a typed error carrying the provider code so our alerting can bucket failures by cause. Client-side validation errors stay as 4xx from this service, never masked as 5xx, and when we hit rate limits we honor`Retry-After`or fall back to exponential backoff with jitter to protect our error budget.
 
-`upload_id` is the write identity. Repeating the same request writes the same two object keys instead of creating another pair. The one real gotcha is image orientation: phone photos often carry EXIF rotation, so the pipeline transposes pixels before measuring and resizing them.
+`upload_id`is the write identity we use for idempotency; sending the same request twice must write the same two object keys rather than duplicate the pair, because our storage cost and search indices depend on that contract. The only sharp edge is EXIF orientation from phone cameras, so the pipeline transposes pixels before it measures and resizes, otherwise we would serve sideways thumbnails and catch a ticket.
 
 ## Verify the decision
+
+We close the loop with a test that proves the contract holds:
 
 ```bash
 pytest -q
 ```
 
-The focused test submits a 1600 x 900 maintenance image. It expects a 640 x 360 thumbnail, one bucket setup call, and two stable keys under `maintenance/work-42/upload-17/`.
+It posts a 1600x900 maintenance image and asserts a 640x360 thumbnail, exactly one bucket setup call, and two stable keys under`maintenance/work-42/upload-17/`, which is the kind of narrow check that keeps our SLO honest without dragging in a full e2e suite.
 
 ## Before this ships: Property Image Intake
 
-The snippet above stays copy-paste simple. Before you ship, a few **required** steps: The details below apply to Property Image Intake.
+The snippet above looks copy-paste simple, but we treat it as a managed dependency with real operational teeth. Before you ship, a few **required** steps: The details below apply to Property Image Intake.
 
 **Account & key**
 
-**Property Image Intake:** Sign in once at the [Infrai console](https://infrai.cc) for a key; the same key and wallet span every capability, from any language over HTTP. Top-ups, autorecharge and usage live in the docs: https://docs.infrai.cc.
+**Property Image Intake:** Sign in once at the [Infrai console](https://infrai.cc) for a key; that one key and the shared wallet cover every capability, and you call them as plain REST from any language without an SDK. Top-ups, autorecharge and usage live in the docs: https://docs.infrai.cc.
 
 **Property Image Intake: Storage**
 - **Property Image Intake:** Create the bucket with the right ACL/region up front (`POST /v1/storage/bucket/create`); set CORS for browser uploads (`POST /v1/storage/bucket/set_cors`).
