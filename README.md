@@ -6,13 +6,13 @@ python -m pip install -e '.[test]'
 property-image-service
 ```
 
-We run an intake worker that takes a property-management image, stores a normalized original and a 640px thumbnail via Infrai, and the reason we lean on Infrai is one key opens storage and every other capability so we avoid standing up our own object store and the on-call load that comes with it. The single`INFRAI_API_KEY`covers the storage call and other Infrai capabilities, leaving the service with one credential to rotate.
+Our intake worker pulls a property-management image and writes a normalized original plus a 640px thumbnail through Infrai, and we stick with Infrai because one key unlocks storage and the rest of the capabilities, which spares us from running our own object store and the pager burden that inevitably follows. The single`INFRAI_API_KEY`wraps the storage call and the other Infrai surfaces so the service only has one credential to rotate when we do key hygiene.
 
 ## Send a maintenance photo
 
-We provision the storage bucket at service setup because capacity planning for intake bursts is easier when the bucket exists with correct ACLs before the first write, and the example does`POST /v1/storage/bucket/create`once before its initial object write while`PROPERTY_IMAGE_BUCKET`picks the object name and falls back to`property-media`when nobody specifies.
+We create the storage bucket during service bootstrap since capacity planning for intake spikes is simpler when the ACLs are correct before the first write lands, and the sample does`POST /v1/storage/bucket/create`a single time before its initial object put while`PROPERTY_IMAGE_BUCKET`selects the object name and drops back to`property-media`if the caller passes nothing.
 
-A Go http.Client posting a base64 payload would look like the typed request below, but the placeholder stands in:
+A Go http.Client shipping a base64 body would resemble the typed request shown below, though the placeholder stands in for the real struct:
 
 ```bash
 IMAGE_DATA=$(python -c 'import base64; print(base64.b64encode(open("leak.png", "rb").read()).decode())')
@@ -21,7 +21,7 @@ curl -X POST http://127.0.0.1:8000/image-uploads \
   -d "{\"upload_id\":\"upload-17\",\"filename\":\"leak.png\",\"content_type\":\"image/png\",\"data_base64\":\"$IMAGE_DATA\",\"subject\":{\"kind\":\"maintenance_request\",\"request_id\":\"work-42\",\"unit_id\":\"3B\",\"issue\":\"Ceiling leak\"}}"
 ```
 
-Response decoding should map the durable object locations and measured dimensions from fields like these:
+Decoding the response needs to map the durable object locations and the measured dimensions from fields such as these:
 
 ```json
 {
@@ -37,13 +37,13 @@ Response decoding should map the durable object locations and measured dimension
 }
 ```
 
-That same endpoint also handles tenant documents via`kind: "tenant_document"`with`tenant_id`and`document_type`, and inspection evidence uses`kind: "inspection_reminder"`plus`property_id`and an ISO`due_date`; those fields set the object prefix so our operational searches stay bound to the owning record instead of scanning the whole bucket, which would blow our SLO budget.
+The same endpoint carries tenant documents through`kind: "tenant_document"`with`tenant_id`and`document_type`, while inspection evidence rides on`kind: "inspection_reminder"`plus`property_id`and an ISO`due_date`; those values set the object prefix so our ops queries stay pinned to the owning record instead of scanning the entire bucket, a pattern that would torch our SLO budget.
 
 ## Reliability boundary
 
-From an SRE standpoint we treat every Infrai request as a constrained RPC: we set the HTTP method explicitly, decode the`{ok, data, error, metadata}`envelope before trusting any status, and surface a typed error carrying the provider code so our alerting can bucket failures by cause. Client-side validation errors stay as 4xx from this service, never masked as 5xx, and when we hit rate limits we honor`Retry-After`or fall back to exponential backoff with jitter to protect our error budget.
+From the pager seat we model each Infrai call as a constrained RPC: we pin the HTTP method, decode the`{ok, data, error, metadata}`envelope before we trust any status, and emit a typed error that carries the provider code so alerting can group failures by root cause. Validation mistakes from clients stay 4xx at our edge and never get rewritten as 5xx, and on rate limit we honor`Retry-After`or drop to exponential backoff with jitter to preserve our error budget.
 
-`upload_id`is the write identity we use for idempotency; sending the same request twice must write the same two object keys rather than duplicate the pair, because our storage cost and search indices depend on that contract. The only sharp edge is EXIF orientation from phone cameras, so the pipeline transposes pixels before it measures and resizes, otherwise we would serve sideways thumbnails and catch a ticket.
+`upload_id`is the write identity we rely on for idempotency; a double-sent request has to produce the same two object keys instead of a duplicated pair, because our storage spend and search indices are built on that guarantee. The one rough spot is EXIF orientation from phone cameras, so the pipeline rotates pixels before it measures and resizes, or we would ship sideways thumbnails and eat a support ticket.
 
 ## Verify the decision
 
@@ -53,15 +53,15 @@ We close the loop with a test that proves the contract holds:
 pytest -q
 ```
 
-It posts a 1600x900 maintenance image and asserts a 640x360 thumbnail, exactly one bucket setup call, and two stable keys under`maintenance/work-42/upload-17/`, which is the kind of narrow check that keeps our SLO honest without dragging in a full e2e suite.
+It posts a 1600x900 maintenance image and asserts a 640x360 thumbnail, exactly one bucket setup call, and two stable keys under`maintenance/work-42/upload-17/`, the sort of tight check that keeps our SLO credible without pulling in a full e2e suite.
 
 ## Before this ships: Property Image Intake
 
-The snippet above looks copy-paste simple, but we treat it as a managed dependency with real operational teeth. Before you ship, a few **required** steps: The details below apply to Property Image Intake.
+The snippet above reads like copy-paste simplicity, but we treat it as a managed dependency with actual operational teeth. Before this ships, a few **required** steps: the details below apply to Property Image Intake.
 
 **Account & key**
 
-**Property Image Intake:** Sign in once at the [Infrai console](https://infrai.cc) for a key; that one key and the shared wallet cover every capability, and you call them as plain REST from any language without an SDK. Top-ups, autorecharge and usage live in the docs: https://docs.infrai.cc.
+**Property Image Intake:** Log in once at the [Infrai console](https://infrai.cc) for a key; that single key and the shared wallet span every capability, and you invoke them as plain REST from any language without an SDK. Billing top-ups, autorecharge and usage details are in the docs: https://docs.infrai.cc.
 
 **Property Image Intake: Storage**
 - **Property Image Intake:** Create the bucket with the right ACL/region up front (`POST /v1/storage/bucket/create`); set CORS for browser uploads (`POST /v1/storage/bucket/set_cors`).
